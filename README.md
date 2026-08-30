@@ -37,9 +37,10 @@ both the Swift encoder tests and the Python collector tests.
 
 ## Publication controls
 
-The package is released from a clean repository rather than transplanted Git
-history. Before a public `0.1.0` tag, the audit repository scan, legal review,
-dependency review, macOS Swift tests, Python collector tests, privacy-manifest
-validation, and golden-fixture parity must all pass. Release tags are signed
-and immutable, and `main` is protected. Issues and private vulnerability
-reports are accepted; external code and pull requests are not merged.
+The public package is exported from its private publication source without
+transplanting private Git history. Relevant changes reach public `main` only
+after the audit repository scan, macOS Swift tests, Python collector tests,
+privacy-manifest validation, and golden-fixture parity pass. Application builds
+pin an explicit package release instead of following `main`. Issues and private
+vulnerability reports are accepted; external code and pull requests are not
+merged.
