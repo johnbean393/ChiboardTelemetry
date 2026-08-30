@@ -1,0 +1,30 @@
+name: Audit package CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  swift:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test
+      - run: plutil -lint Sources/ChiboardTelemetry/Resources/PrivacyInfo.xcprivacy
+      - run: python3 Scripts/validate_audit_repository.py
+
+  collector:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r Collector/requirements.txt
+      - run: python -m unittest discover -s Collector -p 'test_*.py'
+      - run: python Scripts/validate_audit_repository.py

@@ -1,0 +1,11 @@
+Chiboard Anonymous Reports
+
+Sharing is optional and off by default.
+
+If enabled, Chiboard sends a random installation ID, basic app and system details, coarse usage totals, and sanitized crash data to Chiboard's private Alibaba Cloud service. Records expire within 30 days. The ID is not linked to an account.
+
+Chiboard never sends anything you type, Pinyin, conversions, custom terms, file or app details, screenshots, network activity, or diagnostic logs.
+
+You can turn sharing off at any time. This stops future uploads and deletes the local ID and queue. Enabling it again creates a new ID.
+
+Privacy questions: johnbean393@gmail.com

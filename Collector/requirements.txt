@@ -1,0 +1,3 @@
+aliyun-log-python-sdk==0.9.28
+cryptography==45.0.6
+
