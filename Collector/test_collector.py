@@ -34,9 +34,10 @@ def b64url(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).decode().rstrip("=")
 
 
-def fixture_event(name):
+def fixture_event(name, version=None):
     root = os.path.dirname(os.path.dirname(__file__))
-    with open(os.path.join(root, "Contract", "Fixtures", name + ".json"), encoding="utf-8") as handle:
+    parts = [root, "Contract", "Fixtures"] + ([version] if version else []) + [name + ".json"]
+    with open(os.path.join(*parts), encoding="utf-8") as handle:
         return json.load(handle)
 
 
@@ -88,9 +89,55 @@ class CollectorTests(unittest.TestCase):
         self.assertNotIn("ip", row)
 
     def test_accepts_every_versioned_golden_fixture(self):
-        for name in ("usage-summary", "model-load-result", "setup-milestone", "crash"):
+        for name in ("usage-summary", "model-load-result", "setup-milestone", "crash", "term-summary"):
             response = self.call(signed_request(event=fixture_event(name)))
             self.assertEqual(response["statusCode"], 202, name)
+
+    def test_still_accepts_version_1_events_from_earlier_releases(self):
+        for name in ("usage-summary", "model-load-result", "setup-milestone", "crash"):
+            event = fixture_event(name, version="v1")
+            self.assertEqual(event["schema_version"], "1")
+            response = self.call(signed_request(event=event))
+            self.assertEqual(response["statusCode"], 202, name)
+
+    def test_rejects_unknown_schema_version(self):
+        response = self.call(signed_request({"schema_version": "3"}))
+        self.assertEqual(response["statusCode"], 400)
+        self.assertIn("unknown_schema", response["body"])
+
+    def test_term_summary_requires_version_2(self):
+        event = fixture_event("term-summary")
+        event["schema_version"] = "1"
+        response = self.call(signed_request(event=event))
+        self.assertEqual(response["statusCode"], 400)
+        self.assertIn("unknown_schema", response["body"])
+
+    def test_term_summary_rejects_unknown_or_missing_fields(self):
+        for extra in ({"term": "SENTINEL"}, {"term_keys": "chibi"}, {"term_hash": "0" * 64}, {"example_text": "x"}):
+            response = self.call(signed_request(extra, event=fixture_event("term-summary")))
+            self.assertEqual(response["statusCode"], 400, extra)
+            self.assertIn("unknown_event_field", response["body"])
+        event = fixture_event("term-summary")
+        del event["fire_missed"]
+        response = self.call(signed_request(event=event))
+        self.assertEqual(response["statusCode"], 400)
+        self.assertIn("unknown_event_field", response["body"])
+        self.assertEqual(self.sink.rows, [])
+
+    def test_term_summary_values_are_bounded_integers(self):
+        for field, value in (
+            ("fire_key_matches", "驰笔"),
+            ("fire_key_matches", "-1"),
+            ("fire_key_matches", "1.5"),
+            ("fire_key_matches", "2147483648"),
+            ("snapshot_tokens_bucket", "300"),
+            ("snapshot_entries", "65"),
+            ("window_seconds", "1800"),
+        ):
+            response = self.call(signed_request({field: value}, event=fixture_event("term-summary")))
+            self.assertEqual(response["statusCode"], 400, (field, value))
+            self.assertIn("invalid_event_value", response["body"])
+        self.assertEqual(self.sink.rows, [])
 
     def test_rejects_oversized_body_and_batch(self):
         oversized = signed_request()

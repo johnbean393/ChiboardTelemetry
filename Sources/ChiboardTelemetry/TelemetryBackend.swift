@@ -15,7 +15,10 @@ protocol TelemetryBackend: AnyObject {
     func start(configuration: TelemetryBackendConfiguration) -> Bool
     func report(_ record: TelemetryRecord)
     func flush()
+    /// Stops sending. Shutdown flushes first; this sends nothing itself.
     func stop()
+    /// Consent was withdrawn: stops, and cancels requests already started.
+    func discard()
 }
 
 final class NoOpTelemetryBackend: TelemetryBackend {
@@ -23,6 +26,7 @@ final class NoOpTelemetryBackend: TelemetryBackend {
     func report(_ record: TelemetryRecord) {}
     func flush() {}
     func stop() {}
+    func discard() {}
 }
 
 enum TelemetrySigningKeyStore {
@@ -88,7 +92,7 @@ struct TelemetrySignedBatch {
         let keyID = SHA256.hash(data: publicKey).map { String(format: "%02x", $0) }.joined()
         let events: [[String: String]] = records.map { record in
             var event = Dictionary(uniqueKeysWithValues: record.fields.map {
-                ($0.key.rawValue, $0.value)
+                ($0.name, $0.value)
             })
             event["event"] = record.name.rawValue
             return event
@@ -130,6 +134,7 @@ final class CollectorTelemetryBackend: TelemetryBackend, @unchecked Sendable {
     private var configuration: TelemetryBackendConfiguration?
     private var signingKey: Curve25519.Signing.PrivateKey?
     private var uploads: Set<URL> = []
+    private var requests: [URL: URLSessionDataTask] = [:]
     private var running = false
 
     init(fileManager: FileManager = .default, session: URLSession = .shared) {
@@ -199,12 +204,20 @@ final class CollectorTelemetryBackend: TelemetryBackend, @unchecked Sendable {
     }
 
     func stop() {
-        flush()
         lock.withLock {
             running = false
             configuration = nil
             signingKey = nil
         }
+    }
+
+    func discard() {
+        stop()
+        let started = lock.withLock { () -> [URLSessionDataTask] in
+            defer { requests = [:] }
+            return Array(requests.values)
+        }
+        started.forEach { $0.cancel() }
     }
 
     private func upload(_ file: URL, configuration: TelemetryBackendConfiguration) {
@@ -232,13 +245,27 @@ final class CollectorTelemetryBackend: TelemetryBackend, @unchecked Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(signature, forHTTPHeaderField: "X-Chiboard-Signature")
         request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
-        session.dataTask(with: request) { [weak self] _, response, _ in
+        let task = session.dataTask(with: request) { [weak self] _, response, _ in
             guard let self else { return }
             let accepted = (response as? HTTPURLResponse).map { 200..<300 ~= $0.statusCode } ?? false
             if accepted { try? self.fileManager.removeItem(at: file) }
-            _ = self.lock.withLock { self.uploads.remove(file) }
+            self.lock.withLock {
+                _ = self.uploads.remove(file)
+                self.requests[file] = nil
+            }
             if accepted { self.flush() }
-        }.resume()
+        }
+        // Consent may have been withdrawn while the request was prepared:
+        // `discard()` cancels only requests registered before it ran.
+        let registered = lock.withLock { () -> Bool in
+            guard running else {
+                uploads.remove(file)
+                return false
+            }
+            requests[file] = task
+            return true
+        }
+        if registered { task.resume() }
     }
 
     private func queueURL(_ configuration: TelemetryBackendConfiguration) -> URL {

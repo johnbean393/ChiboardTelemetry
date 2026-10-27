@@ -111,8 +111,9 @@ final class TelemetryTests: XCTestCase {
         XCTAssertTrue(firstClient.stop(timeout: 1))
         XCTAssertTrue(secondClient.stop(timeout: 1))
 
-        XCTAssertEqual(firstBackend.stopCount, 1)
-        XCTAssertEqual(secondBackend.stopCount, 1)
+        XCTAssertEqual(firstBackend.discardCount, 1)
+        XCTAssertEqual(secondBackend.discardCount, 1)
+        XCTAssertEqual(firstBackend.stopCount + secondBackend.stopCount, 0)
         XCTAssertNil(fixture.store.installationID)
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.cacheRoot.path))
     }
@@ -177,10 +178,15 @@ final class TelemetryTests: XCTestCase {
         let client = makeEnabledClient(store: fixture.store, backend: backend)
 
         client.start(role: .inputMethod)
+        client.record(.usage(.conversionsStarted))
         client.setConsent(.disabled)
         XCTAssertTrue(client.stop(timeout: 1))
 
-        XCTAssertEqual(backend.stopCount, 1)
+        // Withdrawing consent sends nothing more, not even the queue.
+        XCTAssertEqual(backend.discardCount, 1)
+        XCTAssertEqual(backend.stopCount, 0)
+        XCTAssertEqual(backend.flushCount, 0)
+        XCTAssertTrue(backend.records.isEmpty)
         XCTAssertEqual(fixture.store.state, .disabled)
         XCTAssertNil(fixture.store.installationID)
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.cacheRoot.path))
@@ -264,7 +270,7 @@ final class TelemetryTests: XCTestCase {
         )
 
         let crash = TelemetryRecord(name: .crash, fields: [
-            .init(key: .schemaVersion, value: "1"),
+            .init(key: .schemaVersion, value: "2"),
             .init(key: .processRole, value: "input_method"),
             .init(key: .release, value: "1.2.3+45"),
             .init(key: .macOSVersion, value: "14.6"),
@@ -280,6 +286,58 @@ final class TelemetryTests: XCTestCase {
             ),
         ])
         XCTAssertEqual(crash.canonicalJSON, try fixtureJSON(named: "crash"))
+
+        let terms = TelemetryRecordFactory.make(event: .termSummary(.init([
+            .termsManualChinese: 1, .termsLearnedChinese: 3, .suggestionsPending: 1, .suggestionsAccepted: 3,
+            .suggestionsDismissed: 2, .termLength2: 3, .termLength3: 1, .termSyllables2: 3, .termSyllables3: 1,
+            .keyFormFullPinyin: 2, .keyFormInitials: 1, .keyFormUnknown: 1, .examplesPerTerm0: 1, .examplesPerTerm2: 3,
+            .exampleLength1To10: 4, .exampleLength11To20: 2, .snapshotEntries: 4, .snapshotTokensBucket: 1,
+            .correctionsCandidateChoice: 5, .correctionsReconversion: 1, .correctionsRetype: 2, .suggestionsCreated: 1,
+            .suggestionAccepts: 1, .suggestionDismissals: 1, .termDeletes: 1, .deleteAge8To30Days: 1, .fireKeyMatches: 9,
+            .fireAlreadyCorrect: 7, .fireMissed: 2, .snapshotBuilds: 6, .snapshotChanges: 2,
+        ])), context: context)
+        XCTAssertEqual(terms.canonicalJSON, try fixtureJSON(named: "term-summary"))
+    }
+
+    func testTermSummaryIsNumericOnlyWithAnExactFieldSet() throws {
+        let context = TelemetryRecordContext(role: .inputMethod, release: "1.0+1", macOSVersion: "15.0",
+                                             environment: .test)
+        let record = TelemetryRecordFactory.make(
+            event: .termSummary(.init([.fireKeyMatches: -4, .fireMissed: Int64.max, .snapshotEntries: 12])),
+            context: context)
+        let data = try XCTUnwrap(record.canonicalJSON.data(using: .utf8))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: String])
+        let common: Set = ["event", "schema_version", "process_role", "release", "macos_version", "environment"]
+        XCTAssertEqual(Set(object.keys), common.union(["window_seconds"]).union(TelemetryTermMetric.allCases.map(\.rawValue)))
+        XCTAssertEqual(object["event"], "term_summary")
+        XCTAssertEqual(object["schema_version"], "2")
+        XCTAssertEqual(object["window_seconds"], "86400")
+        for metric in TelemetryTermMetric.allCases {
+            let value = try XCTUnwrap(object[metric.rawValue])
+            XCTAssertTrue(!value.isEmpty && value.allSatisfy(\.isASCII) && value.allSatisfy(\.isNumber), metric.rawValue)
+        }
+        XCTAssertEqual(object["fire_key_matches"], "0", "negative counts are clamped")
+        XCTAssertEqual(object["fire_missed"], String(Int32.max), "counts stay within the collector's bound")
+        XCTAssertEqual(object["snapshot_entries"], "12")
+        XCTAssertEqual(TelemetryTermMetric.allCases.count, 62)
+    }
+
+    func testTermSummaryIsSentOnlyWithConsent() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        let backend = RecordingTelemetryBackend()
+        let client = makeEnabledClient(store: fixture.store, backend: backend)
+        client.start(role: .inputMethod)
+        client.record(.termSummary(.init([.fireKeyMatches: 3])))
+        XCTAssertTrue(client.stop(timeout: 1))
+        XCTAssertTrue(backend.records.isEmpty, "consent is unset by default")
+
+        fixture.store.setState(.enabled)
+        let enabled = makeEnabledClient(store: fixture.store, backend: backend)
+        enabled.start(role: .inputMethod)
+        enabled.record(.termSummary(.init([.fireKeyMatches: 3])))
+        XCTAssertTrue(enabled.stop(timeout: 1))
+        XCTAssertEqual(backend.records.map(\.name), [.termSummary])
     }
 
     func testEventContractHasOnlyAllowlistedFieldsAndNoSensitiveNames() throws {
@@ -292,7 +350,7 @@ final class TelemetryTests: XCTestCase {
             "error_code", "milestone", "result", "event",
             "crash_id", "signal_name", "signal_code", "raw_signature",
             "frame_count", "frames",
-        ])
+        ]).union(TelemetryTermMetric.allCases.map(\.rawValue))
         let banned = Set([
             "text", "typed_text", "pinyin", "context", "key_data", "path",
             "filename", "bundle_id", "client_bundle_id", "custom_term",
@@ -323,10 +381,11 @@ final class TelemetryTests: XCTestCase {
                 event: .setupMilestone(.tutorialComplete, result: .skipped),
                 context: context
             ),
+            TelemetryRecordFactory.make(event: .termSummary(.init([.termsLearnedChinese: 2])), context: context),
         ]
 
         XCTAssertEqual(Set(TelemetryRecordName.allCases), [
-            .usageSummary, .modelLoadResult, .setupMilestone, .crash,
+            .usageSummary, .modelLoadResult, .setupMilestone, .termSummary, .crash,
         ])
         for record in records {
             let data = try XCTUnwrap(record.canonicalJSON.data(using: .utf8))
@@ -412,6 +471,15 @@ final class TelemetryTests: XCTestCase {
             store: TelemetryConsentStore(defaults: defaults, cacheRootURL: root)
         )
     }
+
+    func testTermSummaryClampsToTheCollectorsBounds() {
+        let summary = TelemetryTermSummary([.snapshotEntries: 65, .snapshotTokensBucket: 300, .manualAdds: -1,
+                                            .fireMissed: Int64(Int32.max) + 1])
+        XCTAssertEqual(summary[.snapshotEntries], 64)
+        XCTAssertEqual(summary[.snapshotTokensBucket], 256)
+        XCTAssertEqual(summary[.manualAdds], 0)
+        XCTAssertEqual(summary[.fireMissed], Int64(Int32.max))
+    }
 }
 
 private struct TelemetryFixture {
@@ -434,6 +502,7 @@ private final class RecordingTelemetryBackend: TelemetryBackend {
     private(set) var records: [TelemetryRecord] = []
     private(set) var flushCount = 0
     private(set) var stopCount = 0
+    private(set) var discardCount = 0
 
     init(
         stopDelay: TimeInterval = 0,
@@ -462,6 +531,11 @@ private final class RecordingTelemetryBackend: TelemetryBackend {
     func stop() {
         if stopDelay > 0 { Thread.sleep(forTimeInterval: stopDelay) }
         stopCount += 1
+        onStop?()
+    }
+
+    func discard() {
+        discardCount += 1
         onStop?()
     }
 

@@ -131,6 +131,98 @@ public struct TelemetryUsageSummary: Equatable, Sendable {
     }
 }
 
+/// One numeric field of the daily special-term summary. Each describes the
+/// user's special-term store or its activity as a count, a bucket count, or
+/// a bucket's lower bound; none carries a term, key, example, or anything
+/// derived from their text.
+public enum TelemetryTermMetric: String, CaseIterable, Sendable {
+    case termsManualChinese = "terms_manual_chinese"
+    case termsManualEnglish = "terms_manual_english"
+    case termsSetupChinese = "terms_setup_chinese"
+    case termsSetupEnglish = "terms_setup_english"
+    case termsLearnedChinese = "terms_learned_chinese"
+    case termsLearnedEnglish = "terms_learned_english"
+    case suggestionsPending = "suggestions_pending"
+    case suggestionsAccepted = "suggestions_accepted"
+    case suggestionsDismissed = "suggestions_dismissed"
+    case termLength1 = "term_length_1"
+    case termLength2 = "term_length_2"
+    case termLength3 = "term_length_3"
+    case termLength4 = "term_length_4"
+    case termLength5To6 = "term_length_5_6"
+    case termLength7To10 = "term_length_7_10"
+    case termLength11Plus = "term_length_11_plus"
+    case termSyllables1 = "term_syllables_1"
+    case termSyllables2 = "term_syllables_2"
+    case termSyllables3 = "term_syllables_3"
+    case termSyllables4 = "term_syllables_4"
+    case termSyllables5To6 = "term_syllables_5_6"
+    case termSyllables7Plus = "term_syllables_7_plus"
+    case keyFormFullPinyin = "key_form_full_pinyin"
+    case keyFormInitials = "key_form_initials"
+    case keyFormMixed = "key_form_mixed"
+    case keyFormOther = "key_form_other"
+    case keyFormUnknown = "key_form_unknown"
+    case examplesPerTerm0 = "examples_per_term_0"
+    case examplesPerTerm1 = "examples_per_term_1"
+    case examplesPerTerm2 = "examples_per_term_2"
+    case examplesPerTerm3 = "examples_per_term_3"
+    case examplesPerTerm4Plus = "examples_per_term_4_plus"
+    case exampleLength1To10 = "example_length_1_10"
+    case exampleLength11To20 = "example_length_11_20"
+    case exampleLength21To40 = "example_length_21_40"
+    case exampleLength41To80 = "example_length_41_80"
+    case exampleLength81Plus = "example_length_81_plus"
+    case snapshotEntries = "snapshot_entries"
+    case snapshotTokensBucket = "snapshot_tokens_bucket"
+    case correctionsCandidateChoice = "corrections_candidate_choice"
+    case correctionsReconversion = "corrections_reconversion"
+    case correctionsReconstructedReconversion = "corrections_reconstructed_reconversion"
+    case correctionsRetype = "corrections_retype"
+    case suggestionsCreated = "suggestions_created"
+    case suggestionAccepts = "suggestion_accepts"
+    case suggestionDismissals = "suggestion_dismissals"
+    case manualAdds = "manual_adds"
+    case termEdits = "term_edits"
+    case termDeletes = "term_deletes"
+    case deleteAgeUnder1Day = "delete_age_under_1d"
+    case deleteAge1To7Days = "delete_age_1_7d"
+    case deleteAge8To30Days = "delete_age_8_30d"
+    case deleteAge31To90Days = "delete_age_31_90d"
+    case deleteAge91DaysPlus = "delete_age_91d_plus"
+    case fireKeyMatches = "fire_key_matches"
+    case fireAlreadyCorrect = "fire_already_correct"
+    case fireMissed = "fire_missed"
+    case fireAppliedKept = "fire_applied_kept"
+    case fireOfferedKept = "fire_offered_kept"
+    case fireOverridden = "fire_overridden"
+    case snapshotBuilds = "snapshot_builds"
+    case snapshotChanges = "snapshot_changes"
+}
+
+/// One local day of special-term statistics: counts only. Values are
+/// clamped to what the collector accepts: 0...Int32.max, at most the
+/// snapshot's 64 entries, and a token bucket's lower bound.
+public struct TelemetryTermSummary: Equatable, Sendable {
+    public static let snapshotCapacity: Int64 = 64
+    public static let snapshotTokenBuckets: [Int64] = [0, 1, 256, 512, 1024, 2048, 4096, 8192]
+
+    public private(set) var values: [TelemetryTermMetric: Int64]
+
+    public init(_ values: [TelemetryTermMetric: Int64] = [:]) {
+        var clamped = values.mapValues { min(max(0, $0), Int64(Int32.max)) }
+        if let entries = clamped[.snapshotEntries] { clamped[.snapshotEntries] = min(entries, Self.snapshotCapacity) }
+        if let tokens = clamped[.snapshotTokensBucket] {
+            clamped[.snapshotTokensBucket] = Self.snapshotTokenBuckets.last { $0 <= tokens } ?? 0
+        }
+        self.values = clamped
+    }
+
+    public subscript(metric: TelemetryTermMetric) -> Int64 {
+        values[metric] ?? 0
+    }
+}
+
 /// The only recordable events. There is intentionally no arbitrary event,
 /// property, dictionary, log, snapshot, or manual crash case.
 public enum TelemetryEvent: Equatable, Sendable {
@@ -142,6 +234,8 @@ public enum TelemetryEvent: Equatable, Sendable {
         errorCode: TelemetryModelLoadErrorCode
     )
     case setupMilestone(TelemetrySetupMilestone, result: TelemetrySetupResult)
+    /// A finished local day's special-term statistics, sent as one record.
+    case termSummary(TelemetryTermSummary)
 }
 
 public protocol TelemetryReporting: AnyObject {

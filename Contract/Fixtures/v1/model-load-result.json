@@ -1,0 +1,1 @@
+{"backend":"metal","environment":"prod","error_code":"3","event":"model_load_result","load_milliseconds":"321","macos_version":"14.6","process_role":"input_method","release":"1.2.3+45","schema_version":"1","success":"false"}

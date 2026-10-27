@@ -64,7 +64,7 @@ final class TelemetryCrashCapture {
         let signature = SHA256.hash(data: Data(signatureMaterial.utf8))
             .map { String(format: "%02x", $0) }.joined()
         let common = [
-            TelemetryField(key: .schemaVersion, value: "1"),
+            TelemetryField(key: .schemaVersion, value: String(TelemetryRecord.schemaVersion)),
             .init(key: .processRole, value: context.role.rawValue),
             .init(key: .release, value: context.release),
             .init(key: .macOSVersion, value: context.macOSVersion),

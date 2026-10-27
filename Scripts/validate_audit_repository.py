@@ -107,8 +107,12 @@ def main() -> None:
     if source_modules != {"ChiboardTelemetry"}:
         fail(f"Unexpected source module(s): {sorted(source_modules)}")
     fixtures = {path.stem for path in (ROOT / "Contract" / "Fixtures").glob("*.json")}
-    if fixtures != {"usage-summary", "model-load-result", "setup-milestone", "crash"}:
+    if fixtures != {"usage-summary", "model-load-result", "setup-milestone", "crash", "term-summary"}:
         fail(f"Golden payload fixture set is incomplete: {sorted(fixtures)}")
+    # Earlier releases still send version 1, which the collector accepts.
+    legacy = {path.stem for path in (ROOT / "Contract" / "Fixtures" / "v1").glob("*.json")}
+    if legacy != {"usage-summary", "model-load-result", "setup-milestone", "crash"}:
+        fail(f"Version 1 fixture set is incomplete: {sorted(legacy)}")
 
     print("Validated public audit scope, dependencies, private paths, binaries, and secrets.")
 

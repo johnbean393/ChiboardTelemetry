@@ -19,7 +19,8 @@ contributions require a separate written license from the copyright holder.
 - The collector rejects unknown schemas, events, and fields.
 - Neither the client nor collector records typed text, Pinyin, conversions,
   custom terms, files, applications, screenshots, diagnostic logs, or source
-  IP addresses.
+  IP addresses. The daily special-term summary is counts only: never a term,
+  its keys, its examples, or a hash of them.
 
 See [PRIVACY.md](PRIVACY.md) for the wire contract and retention policy.
 

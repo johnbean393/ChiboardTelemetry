@@ -4,6 +4,7 @@ enum TelemetryRecordName: String, CaseIterable {
     case usageSummary = "usage_summary"
     case modelLoadResult = "model_load_result"
     case setupMilestone = "setup_milestone"
+    case termSummary = "term_summary"
     case crash
 }
 
@@ -37,19 +38,34 @@ enum TelemetryFieldKey: String, CaseIterable {
     case frames
 }
 
+/// A field is named by the fixed field keys, or for the special-term
+/// summary, by its fixed metrics; there is no other way to name one.
 struct TelemetryField: Equatable {
-    let key: TelemetryFieldKey
+    let name: String
     let value: String
+
+    init(key: TelemetryFieldKey, value: String) {
+        name = key.rawValue
+        self.value = value
+    }
+
+    init(metric: TelemetryTermMetric, value: Int64) {
+        name = metric.rawValue
+        self.value = String(value)
+    }
+
+    var key: TelemetryFieldKey? { TelemetryFieldKey(rawValue: name) }
 }
 
 struct TelemetryRecord: Equatable {
-    static let schemaVersion = 1
+    /// Version 2 added `term_summary`; the other events are unchanged.
+    static let schemaVersion = 2
 
     let name: TelemetryRecordName
     let fields: [TelemetryField]
 
     var canonicalJSON: String {
-        var object = Dictionary(uniqueKeysWithValues: fields.map { ($0.key.rawValue, $0.value) })
+        var object = Dictionary(uniqueKeysWithValues: fields.map { ($0.name, $0.value) })
         object["event"] = name.rawValue
         let data = try? JSONSerialization.data(
             withJSONObject: object,
@@ -125,9 +141,13 @@ enum TelemetryUploadEvent: Equatable {
         errorCode: TelemetryModelLoadErrorCode
     )
     case setupMilestone(TelemetrySetupMilestone, result: TelemetrySetupResult)
+    case termSummary(TelemetryTermSummary)
 }
 
 enum TelemetryRecordFactory {
+    /// A day, whatever its local length.
+    static let termSummaryWindowSeconds = 86_400
+
     static func make(
         event: TelemetryUploadEvent,
         context: TelemetryRecordContext
@@ -165,6 +185,11 @@ enum TelemetryRecordFactory {
                 .init(key: .milestone, value: milestone.rawValue),
                 .init(key: .result, value: result.rawValue),
             ])
+        case let .termSummary(summary):
+            // Every metric, zeros included, so the field set is always exact.
+            return TelemetryRecord(name: .termSummary, fields: common + [
+                .init(key: .windowSeconds, value: String(termSummaryWindowSeconds)),
+            ] + TelemetryTermMetric.allCases.map { .init(metric: $0, value: summary[$0]) })
         }
     }
 }

@@ -23,6 +23,79 @@ MAX_BODY_BYTES = 64 * 1024
 MAX_EVENTS_PER_BATCH = 50
 MAX_CLOCK_SKEW_SECONDS = 24 * 60 * 60
 
+# Version 2 added term_summary; the other events are unchanged from version 1.
+SCHEMA_VERSIONS = {"1", "2"}
+EVENT_SCHEMA_VERSIONS = {"term_summary": {"2"}}
+
+# The daily special-term summary: numeric store, shape, lifecycle, firing,
+# and snapshot counts. No field names or carries a term, key, or example.
+TERM_METRICS = (
+    "terms_manual_chinese",
+    "terms_manual_english",
+    "terms_setup_chinese",
+    "terms_setup_english",
+    "terms_learned_chinese",
+    "terms_learned_english",
+    "suggestions_pending",
+    "suggestions_accepted",
+    "suggestions_dismissed",
+    "term_length_1",
+    "term_length_2",
+    "term_length_3",
+    "term_length_4",
+    "term_length_5_6",
+    "term_length_7_10",
+    "term_length_11_plus",
+    "term_syllables_1",
+    "term_syllables_2",
+    "term_syllables_3",
+    "term_syllables_4",
+    "term_syllables_5_6",
+    "term_syllables_7_plus",
+    "key_form_full_pinyin",
+    "key_form_initials",
+    "key_form_mixed",
+    "key_form_other",
+    "key_form_unknown",
+    "examples_per_term_0",
+    "examples_per_term_1",
+    "examples_per_term_2",
+    "examples_per_term_3",
+    "examples_per_term_4_plus",
+    "example_length_1_10",
+    "example_length_11_20",
+    "example_length_21_40",
+    "example_length_41_80",
+    "example_length_81_plus",
+    "snapshot_entries",
+    "snapshot_tokens_bucket",
+    "corrections_candidate_choice",
+    "corrections_reconversion",
+    "corrections_reconstructed_reconversion",
+    "corrections_retype",
+    "suggestions_created",
+    "suggestion_accepts",
+    "suggestion_dismissals",
+    "manual_adds",
+    "term_edits",
+    "term_deletes",
+    "delete_age_under_1d",
+    "delete_age_1_7d",
+    "delete_age_8_30d",
+    "delete_age_31_90d",
+    "delete_age_91d_plus",
+    "fire_key_matches",
+    "fire_already_correct",
+    "fire_missed",
+    "fire_applied_kept",
+    "fire_offered_kept",
+    "fire_overridden",
+    "snapshot_builds",
+    "snapshot_changes",
+)
+TERM_SNAPSHOT_TOKEN_BUCKETS = {"0", "1", "256", "512", "1024", "2048", "4096", "8192"}
+TERM_SNAPSHOT_CAPACITY = 64
+
 COMMON_FIELDS = {
     "schema_version",
     "event",
@@ -48,6 +121,7 @@ EVENT_FIELDS = {
     "model_load_result": COMMON_FIELDS
     | {"success", "backend", "load_milliseconds", "error_code"},
     "setup_milestone": COMMON_FIELDS | {"milestone", "result"},
+    "term_summary": COMMON_FIELDS | {"window_seconds"} | set(TERM_METRICS),
     "crash": COMMON_FIELDS
     | {"crash_id", "signal_name", "signal_code", "raw_signature", "frame_count", "frames"},
 }
@@ -129,7 +203,7 @@ def _validate_event(event: Any) -> dict[str, str]:
     _require_exact_fields(event, EVENT_FIELDS[name], "unknown_event_field")
     if not all(isinstance(key, str) and isinstance(value, str) for key, value in event.items()):
         raise ValidationError("invalid_event_value")
-    if event["schema_version"] != "1":
+    if event["schema_version"] not in EVENT_SCHEMA_VERSIONS.get(name, SCHEMA_VERSIONS):
         raise ValidationError("unknown_schema")
     if event["process_role"] not in ROLES or event["environment"] not in ENVIRONMENTS:
         raise ValidationError("invalid_event_value")
@@ -147,6 +221,14 @@ def _validate_event(event: Any) -> dict[str, str]:
     elif name == "setup_milestone":
         if event["milestone"] not in MILESTONES or event["result"] not in RESULTS:
             raise ValidationError("invalid_event_value")
+    elif name == "term_summary":
+        if event["window_seconds"] != "86400":
+            raise ValidationError("invalid_event_value")
+        for key in TERM_METRICS:
+            _integer_string(event[key])
+        if event["snapshot_tokens_bucket"] not in TERM_SNAPSHOT_TOKEN_BUCKETS:
+            raise ValidationError("invalid_event_value")
+        _integer_string(event["snapshot_entries"], TERM_SNAPSHOT_CAPACITY)
     elif name == "crash":
         try:
             crash_id = str(uuid.UUID(event["crash_id"])).lower()

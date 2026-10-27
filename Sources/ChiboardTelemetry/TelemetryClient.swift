@@ -131,7 +131,7 @@ public final class TelemetryClient: TelemetryReporting, @unchecked Sendable {
     public func setConsent(_ state: TelemetryConsentState) {
         queue.async { [weak self] in
             guard let self else { return }
-            if state != .enabled { self.stopBackendLocked() }
+            if state != .enabled { self.stopBackendLocked(discarding: true) }
             self.consentStore.setState(state)
             if state == .enabled {
                 self.reconcileConsentLocked()
@@ -160,6 +160,8 @@ public final class TelemetryClient: TelemetryReporting, @unchecked Sendable {
                 ))
             case let .setupMilestone(milestone, result):
                 self.reportLocked(.setupMilestone(milestone, result: result))
+            case let .termSummary(summary):
+                self.reportLocked(.termSummary(summary))
             }
         }
     }
@@ -181,7 +183,7 @@ public final class TelemetryClient: TelemetryReporting, @unchecked Sendable {
 
     private func reconcileConsentLocked() {
         guard consentStore.state == .enabled else {
-            stopBackendLocked()
+            stopBackendLocked(discarding: true)
             counters = TelemetryUsageSummary()
             windowStartedAt = nil
             consentStore.purgeAllCaches()
@@ -255,12 +257,13 @@ public final class TelemetryClient: TelemetryReporting, @unchecked Sendable {
         backend.report(TelemetryRecordFactory.make(event: event, context: context))
     }
 
-    private func stopBackendLocked() {
+    /// Without consent, nothing more is sent: not even what was queued.
+    private func stopBackendLocked(discarding: Bool = false) {
         timer?.cancel()
         timer = nil
         crashCapture?.purge()
         crashCapture = nil
-        backend?.stop()
+        if discarding { backend?.discard() } else { backend?.stop() }
         backend = nil
         context = nil
     }
